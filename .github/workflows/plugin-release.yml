@@ -1,0 +1,90 @@
+name: Release Gameyfin plugin
+on:
+  workflow_call:
+    inputs:
+      actions_ref:
+        description: Reviewed gameyfin/actions commit, identical to the caller's uses pin
+        required: true
+        type: string
+    secrets:
+      GAMEYFIN_KEYSTORE_BASE64:
+        required: true
+      GAMEYFIN_KEYSTORE_PASSWORD:
+        required: true
+      MARKETPLACE_BOT_APP_ID:
+        required: true
+      MARKETPLACE_BOT_PRIVATE_KEY:
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: plugin-release-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: '25'
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+      - run: ./gradlew clean build
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: unsigned-plugin
+          path: build/libs/*.jar
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: plugin-metadata
+          path: marketplace.json
+          if-no-files-found: error
+  release:
+    needs: build
+    if: github.repository_owner == 'gameyfin' && github.ref_type == 'tag' && github.ref_protected && startsWith(github.ref_name, 'v')
+    environment: plugin-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout reviewed release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: gameyfin/actions
+          ref: ${{ inputs.actions_ref }}
+          persist-credentials: false
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: '25'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: unsigned-plugin
+          path: unsigned
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: plugin-metadata
+      - name: Sign or verify existing immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GAMEYFIN_KEYSTORE_BASE64: ${{ secrets.GAMEYFIN_KEYSTORE_BASE64 }}
+          GAMEYFIN_KEYSTORE_PASSWORD: ${{ secrets.GAMEYFIN_KEYSTORE_PASSWORD }}
+        run: python3 scripts/release_plugin.py
+      - name: Create narrowly scoped marketplace token
+        id: marketplace-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ secrets.MARKETPLACE_BOT_APP_ID }}
+          private-key: ${{ secrets.MARKETPLACE_BOT_PRIVATE_KEY }}
+          owner: gameyfin
+          repositories: plugin-marketplace
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Propose marketplace manifest
+        env:
+          GH_TOKEN: ${{ steps.marketplace-token.outputs.token }}
+        run: python3 scripts/propose_marketplace.py
