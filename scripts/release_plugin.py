@@ -39,6 +39,11 @@ def main():
     repository = os.environ['GITHUB_REPOSITORY']
     tag = os.environ['GITHUB_REF_NAME']
     assert repository.startswith('gameyfin/') and os.environ['GITHUB_REF_PROTECTED'] == 'true'
+    publish(repository, tag)
+
+
+def checked_artifact(repository, tag):
+    assert repository.startswith('gameyfin/plugin-')
     jars = list(Path('unsigned').glob('*.jar'))
     assert len(jars) == 1, 'Expected exactly one plugin JAR'
     unsigned = jars[0]
@@ -48,6 +53,11 @@ def main():
     assert attrs.get('Plugin-Requires') and attrs['Plugin-Requires'] != '*', 'Compatibility baseline required'
     assert attrs['Plugin-Url'] == f'https://github.com/{repository}'
     assert attrs['Plugin-Id'].startswith('org.gameyfin.')
+    return unsigned, attrs, version
+
+
+def publish(repository, tag):
+    unsigned, attrs, version = checked_artifact(repository, tag)
     output = Path('signed'); output.mkdir()
     signed = output / unsigned.name
     result = subprocess.run(['gh', 'api', f'repos/{repository}/releases/tags/{tag}'], capture_output=True, text=True)
